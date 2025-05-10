@@ -1,0 +1,39 @@
+以下是整理后的 Markdown 格式内容：
+
+---
+
+# **环境搭建与启动指南**
+
+## **1. 环境搭建步骤**
+
+```bash
+
+cd /app
+
+
+git clone https://github.com/FriendChi/Timing_problem.git
+
+mkdir /app/time_env
+python3 -m venv /app/time_env
+
+source /app/time_env/bin/activate
+
+pip install poetry
+
+cd /app/Timing_problem/project
+
+poetry install
+```
+
+---
+
+## **2. 启动应用**
+
+```bash
+# 执行主程序并指定 CSV 文件路径
+python /app/Timing_problem/main.py --csv_dir /app/Timing_problem/rlData.csv
+```
+
+---
+
+

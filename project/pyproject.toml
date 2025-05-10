@@ -1,0 +1,24 @@
+[project]
+name = "project"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "FriendChi",email = "tryle1729584503@outlook.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch (>=2.6.0,<3.0.0)",
+    "torchvision (>=0.21.0,<0.22.0)",
+    "scikit-learn (>=1.6.1,<2.0.0)",
+    "pandas (>=2.2.3,<3.0.0)",
+    "matplotlib (>=3.10.3,<4.0.0)"
+]
+
+[tool.poetry]
+packages = [{include = "project", from = "src"}]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
