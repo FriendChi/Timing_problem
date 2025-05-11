@@ -16,7 +16,7 @@ def get_parser():
         action='store',
         type=int,
         help='时间窗口',
-        default=10,
+        default=50,
     )
     parser.add_argument(
         '--a_lr',

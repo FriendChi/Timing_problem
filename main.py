@@ -15,7 +15,7 @@ if __name__ == '__main__':
     args = vars(parser.parse_args())
 
     data = pd.read_csv(args['csv_dir'])
-    series = data["target_column"].values.reshape(-1, 1)
+    series = data["Close"].values.reshape(-1, 1)
     states, targets = create_states(data,args['look_back'])
 
     scaler = MinMaxScaler(feature_range=(0, 1))

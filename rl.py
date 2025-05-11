@@ -34,8 +34,6 @@ def create_states(data, look_back=1):
     # 将列表转换为 NumPy 数组并返回
     return np.array(X), np.array(Y)
 
-look_back = 50
-states, targets = create_states(scaled_series, look_back=look_back)
 
 class TimeSeriesEnv:
     def __init__(self, states, targets):
