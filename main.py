@@ -1,4 +1,6 @@
-from rl import *
+from lib.rl import *
+from lib.arguments import *
+from lib.data import *
 import numpy as np
 import pandas as pd
 import torch
@@ -7,19 +9,107 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from arguments import get_parser
+
+
+def train_model(model,
+                env,
+                actor_optimizer,
+                critic_optimizer,
+                args):
+    """
+    训练模型并返回每个 episode 的总奖励列表。
+
+    Args:
+        model (nn.Module): Actor-Critic 模型。
+        env: OpenAI Gym 或自定义环境实例。
+        actor_optimizer (torch.optim.Optimizer): Actor 优化器。
+        critic_optimizer (torch.optim.Optimizer): Critic 优化器。
+        args (dict): 各种超参数字典，需包含：
+            - num_episodes (int): 训练 episode 数量
+            - gamma (float): 折扣因子
+            - eps_clip (float): PPO 裁剪阈值
+            - print_interval (int): 每隔多少个 episode 打印一次日志
+
+    Returns:
+        rewards_list (list of float): 每个 episode 的累计奖励
+    """
+    rewards_list = []
+
+    # 外层进度条：episodes
+    for episode in trange(args['num_episodes'], desc='Episodes', unit='epi'):
+        state = env.reset()
+        done = False
+        total_reward = 0.0
+
+        # 如果想要显示每个 timestep，可启用下面的 tqdm
+        # step_iter = tqdm(desc='Steps', leave=False, unit='step')
+
+        while not done:
+            # step_iter.update(1)
+
+            # 状态转 tensor
+            state_tensor = torch.FloatTensor(state).unsqueeze(0)
+
+            # Actor-Critic 前向
+            action, dist = model.get_action(state_tensor)
+            value = model.get_value(state_tensor)
+
+            # 环境交互
+            next_state, reward, done = env.step(action.numpy())  # 若 action 是 tensor，则转 numpy
+
+            # 下一个状态价值
+            if not done:
+                next_state_tensor = torch.FloatTensor(next_state).unsqueeze(0)
+                next_value = model.get_value(next_state_tensor)
+            else:
+                next_value = torch.tensor([0.0])
+
+            # 计算 TD-error 和优势
+            delta = reward + args['gamma'] * next_value - value
+            advantage = delta.item()
+
+            # Critic 更新
+            critic_loss = delta.pow(2).mean()
+            critic_optimizer.zero_grad()
+            critic_loss.backward()
+            critic_optimizer.step()
+
+            # Actor 更新 (PPO clip)
+            ratio = torch.exp(dist.log_prob(action) - dist.log_prob(action).detach())
+            surr1 = ratio * advantage
+            surr2 = torch.clamp(ratio, 1 - args['eps_clip'], 1 + args['eps_clip']) * advantage
+            actor_loss = -torch.min(surr1, surr2).mean()
+
+            actor_optimizer.zero_grad()
+            actor_loss.backward()
+            actor_optimizer.step()
+
+            total_reward += reward
+            state = next_state
+
+        # step_iter.close()
+
+        rewards_list.append(total_reward)
+
+        # 定期输出日志
+        if (episode + 1) % args.get('print_interval', 10) == 0:
+            avg_rew = sum(rewards_list[-args['print_interval']:]) / args['print_interval']
+            print(f"[Episode {episode+1:4d}/{args['num_episodes']}] "
+                  f"Avg Reward (last {args['print_interval']}): {avg_rew:.3f}")
+
+    print("Training complete.")
+    return rewards_list
 
 
 if __name__ == '__main__':
+    # 获取指令
     parser = get_parser()
     args = vars(parser.parse_args())
 
+    # 数据处理
     data = pd.read_csv(args['csv_dir'])
-    series = data["Close"].values.reshape(-1, 1)
-    states, targets = create_states(data,args['look_back'])
-
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_series = scaler.fit_transform(series)
+    dataset = TimeSeriesDataset(data, look_back=args['look_back'])
+    dataloader = DataLoader(dataset, batch_size=args['batch_size'], shuffle=False)
 
     # 初始化 Actor-Critic 模型
     # look_back: 状态历史窗口长度（输入特征维度）
@@ -31,64 +121,12 @@ if __name__ == '__main__':
     critic_optimizer = optim.Adam(model.critic.parameters(), lr=args['c_lr'])    # Critic 学习率 3e-4
 
     # 创建时间序列环境
-    # states: 输入状态（历史窗口数据），targets: 目标值（下一时间步的真实值）
-    env = TimeSeriesEnv(states, targets)
+    env = TimeSeriesEnv(dataloader)
 
-    num_episodes = 100  # 训练总轮数
-    gamma = 0.99        # 折扣因子（未来奖励的重要性）
-    eps_clip = 0.2      # PPO 中的 clip 参数（限制策略更新幅度）
+    # 训练模型
+    rewards_list = train_model(model,
+                                env,
+                                actor_optimizer,
+                                critic_optimizer,
+                                args)
 
-    for episode in range(num_episodes):  # 开始训练循环
-        state = env.reset()              # 重置环境，获取初始状态
-        done = False                     # 标记是否完成当前 episode
-        total_reward = 0                 # 累计当前 episode 的总奖励
-
-        while not done:  # 时间步循环
-            # 将当前状态转换为 PyTorch 张量，并增加批次维度 [1, look_back]
-            state_tensor = torch.FloatTensor(state).unsqueeze(0)
-            
-            # 通过模型获取动作（预测值）和动作分布（如高斯分布）
-            action, dist = model.get_action(state_tensor)
-            
-            # 获取 Critic 对当前状态的价值估计
-            value = model.get_value(state_tensor)
-
-            # 在环境中执行动作，得到下一个状态、奖励和终止标志
-            next_state, reward, done = env.step(action)
-
-            # 计算下一个状态的价值（若存在）
-            if next_state is not None:
-                next_state_tensor = torch.FloatTensor(next_state).unsqueeze(0)
-                next_value = model.get_value(next_state_tensor)
-            else:
-                next_value = torch.tensor([0])  # 若为终止状态，价值设为 0
-
-            # 计算 TD 残差（delta）和优势值
-            delta = reward + gamma * next_value - value  # TD-error
-            advantage = delta.item()  # 单步优势值
-
-            # Critic 更新：最小化 TD-error 的平方
-            critic_loss = delta.pow(2).mean()  # Critic 损失（均方误差）
-            critic_optimizer.zero_grad()       # 清空梯度
-            critic_loss.backward()             # 反向传播计算梯度
-            critic_optimizer.step()            # 更新 Critic 参数
-
-            # Actor 更新：使用 PPO 的 clip 方法（Trusted Region Policy Optimization）
-            # 计算新旧策略的概率比（ratio）
-            ratio = torch.exp(dist.log_prob(action) - dist.log_prob(action).detach())  # 错误：此处 ratio 恒为 1！
-            
-            # 计算 Surrogate Loss（目标函数）
-            surr1 = ratio * advantage                  # 未裁剪的目标
-            surr2 = torch.clamp(ratio, 1 - eps_clip, 1 + eps_clip) * advantage  # 裁剪后的目标
-            actor_loss = -torch.min(surr1, surr2).mean()  # 最小化负的最小值（等效于最大化）
-
-            # 更新 Actor 参数
-            actor_optimizer.zero_grad()
-            actor_loss.backward()
-            actor_optimizer.step()
-
-            total_reward += reward  # 累计奖励
-            state = next_state      # 更新状态
-
-        # 打印训练信息
-        print(f"Episode [{episode+1}/{num_episodes}], Total Reward: {total_reward:.4f}")

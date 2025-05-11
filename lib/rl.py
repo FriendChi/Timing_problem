@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from torch.distributions import Normal
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -8,82 +9,60 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 
-def create_states(data, look_back=1):
-    """
-    将时间序列数据转换为监督学习格式（输入特征 X 和目标变量 Y）。
-    
-    Args:
-        data (np.ndarray): 输入的时间序列数据，形状为 [n_samples, n_features]。
-        look_back (int): 使用过去多少个时间步的数据作为输入特征（历史窗口大小）。
-    
-    Returns:
-        tuple: (X, Y)
-            - X: 输入特征，形状为 [n_samples - look_back, look_back]
-            - Y: 目标变量，形状为 [n_samples - look_back, ]
-    """
-    X, Y = [], []  # 初始化输入特征列表和目标变量列表
-    
-    # 遍历时间序列数据，构建输入-目标对
-    for i in range(len(data) - look_back):
-        # 提取历史窗口数据（从 i 到 i+look_back 的时间步），取第 0 列作为特征
-        X.append(data[i:(i + look_back), 0])
-        
-        # 提取目标值（下一个时间步的数据），取第 0 列
-        Y.append(data[i + look_back, 0])
-    
-    # 将列表转换为 NumPy 数组并返回
-    return np.array(X), np.array(Y)
-
-
 class TimeSeriesEnv:
-    def __init__(self, states, targets):
+    def __init__(self, dataloader):
         """
-        初始化时间序列环境。
+        初始化时间序列环境，支持批次数据。
         
         Args:
-            states (np.ndarray): 输入的观测状态（时间序列的历史窗口），形状为 [n_samples, look_back]
-            targets (np.ndarray): 目标值（时间序列的未来值），形状为 [n_samples, ]
+            dataloader (DataLoader): 包含时间序列数据的批次加载器。
         """
-        self.states = states              # 存储所有观测状态（历史时间窗口）
-        self.targets = targets            # 存储所有目标值（未来值）
-        self.current_step = 0             # 当前时间步，初始化为0
-        self.n_steps = len(states)        # 总时间步数（等于 states 的长度）
+        self.dataloader = dataloader
+        self.data_iter = None
+        self.current_batch = None
+        self.batch_index = 0
+        self.current_step = 0
 
     def reset(self):
         """
-        重置环境到初始状态。
-        
-        Returns:
-            np.ndarray: 初始状态（第一个时间步的观测）
+        重置环境到初始状态，并返回第一个批次的第一个状态。
         """
-        self.current_step = 0             # 重置当前时间步为0
-        return self.states[self.current_step]  # 返回第一个时间步的状态
+        self.data_iter = iter(self.dataloader)
+        self.current_step = 0
+        self.current_batch = next(self.data_iter)
+        self.batch_index = 0
+        return self.current_batch[0][self.batch_index]
 
     def step(self, action):
         """
         执行一步动作，返回下一个状态、奖励和是否结束。
         
         Args:
-            action (torch.Tensor): 智能体采取的动作（预测值），形状为 [1, 1]
-        
+            action (torch.Tensor): 智能体采取的动作（预测值）
+
         Returns:
-            tuple: 
-                - next_state (np.ndarray or None): 下一个状态（若未结束）或 None
-                - reward (float): 负的预测误差（越接近真实值，奖励越高）
-                - done (bool): 是否达到序列末尾
+            tuple: 下一个状态、奖励、是否结束
         """
-        self.current_step += 1  # 更新时间步
-        
-        # 判断是否结束：当 current_step >= n_steps - 1 时结束
-        done = self.current_step >= self.n_steps - 1
-        
-        # 获取下一个状态（若未结束）或 None（结束时）
-        next_state = self.states[self.current_step] if not done else None
-        
-        # 计算奖励：负的预测误差（预测值越接近真实值，奖励越高）
-        reward = -abs(action.item() - self.targets[self.current_step])  # action.item() 将张量转为浮点数
-        
-        return next_state, reward, done  # 返回下一个状态、奖励、是否结束
+        target = self.current_batch[1][self.batch_index].item()
+        reward = -abs(action.item() - target)
+        self.batch_index += 1
+        self.current_step += 1
+
+        # 检查是否还有更多样本在当前批次中
+        if self.batch_index < len(self.current_batch[0]):
+            next_state = self.current_batch[0][self.batch_index]
+            done = False
+        else:
+            try:
+                self.current_batch = next(self.data_iter)
+                self.batch_index = 0
+                next_state = self.current_batch[0][self.batch_index]
+                done = False
+            except StopIteration:
+                next_state = None
+                done = True
+
+        return next_state, reward, done
 
 class ActorCritic(nn.Module):
     """
