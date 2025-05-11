@@ -9,7 +9,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-
+from tqdm import trange, tqdm
 
 def train_model(model,
                 env,
@@ -122,6 +122,8 @@ if __name__ == '__main__':
 
     # 创建时间序列环境
     env = TimeSeriesEnv(dataloader)
+
+    args['print_interval'] = int(args['num_episodes']*0.1)
 
     # 训练模型
     rewards_list = train_model(model,

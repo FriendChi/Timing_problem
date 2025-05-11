@@ -1,5 +1,13 @@
 以下是整理后的 Markdown 格式内容：
 
+# **计划**
+引入wandb
+加入模型保存功能
+加入评估
+加入测试
+
+
+
 ---
 
 # **环境搭建与启动指南**
@@ -37,3 +45,12 @@ python /app/Timing_problem/main.py --csv_dir /app/Timing_problem/rlData.csv
 ---
 
 
+## **3. 启动应用**
+
+```bash
+poetry new project  # 生成目录结构及 pyproject.toml
+cd project
+poetry add pandas
+```
+
+---

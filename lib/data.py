@@ -86,7 +86,6 @@ class TimeSeriesDataset(Dataset):
         # 使用NumPy数组进行切片操作
         x = self.data[idx:idx + self.look_back, 0]  # 假设输入特征总是第0列
         y = self.data[idx + self.look_back, self.target_col]
-        print()
         return torch.tensor(x, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
 
 
