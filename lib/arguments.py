@@ -60,6 +60,19 @@ def get_parser():
         type=float,
         default=0.2,
     )
-
+    parser.add_argument(
+        '--task_name',
+        action='store',
+        type=str,
+        help='任务名称，决定了记录文件对应的文件夹',
+        default='default',
+    )
+    parser.add_argument(
+        '--ckpt_dir',
+        action='store',
+        type=str,
+        help='指向保存ckpt的文件夹',
+        default=None,
+    )
 
     return parser

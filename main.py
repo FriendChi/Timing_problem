@@ -1,6 +1,7 @@
 from lib.rl import *
 from lib.arguments import *
 from lib.data import *
+from lib.utils import *
 import numpy as np
 import pandas as pd
 import torch
@@ -10,12 +11,18 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from tqdm import trange, tqdm
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
+import torch.optim.lr_scheduler as lr_scheduler
 
 def train_model(model,
                 env,
                 actor_optimizer,
+                actor_scheduler,
                 critic_optimizer,
-                args):
+                critic_scheduler,
+                args,
+                writer):
     """
     训练模型并返回每个 episode 的总奖励列表。
 
@@ -92,10 +99,21 @@ def train_model(model,
         rewards_list.append(total_reward)
 
         # 定期输出日志
+        writer.add_scalar('Train', total_reward, episode)
+        actor_scheduler.step()
+        critic_scheduler.step()
         if (episode + 1) % args.get('print_interval', 10) == 0:
             avg_rew = sum(rewards_list[-args['print_interval']:]) / args['print_interval']
             print(f"[Episode {episode+1:4d}/{args['num_episodes']}] "
                   f"Avg Reward (last {args['print_interval']}): {avg_rew:.3f}")
+            save_checkpoint(model, 
+                    actor_optimizer, 
+                    critic_optimizer,
+                    actor_scheduler,
+                    critic_scheduler,
+                    episode,
+                    filename=args['ckpt_dir'])
+            
 
     print("Training complete.")
     return rewards_list
@@ -105,6 +123,11 @@ if __name__ == '__main__':
     # 获取指令
     parser = get_parser()
     args = vars(parser.parse_args())
+
+    # 获取当前时间并格式化为字符串，精确到秒
+    current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+    # 创建 SummaryWriter，日志保存在以当前时间命名的文件夹中
+    writer = SummaryWriter(f'runs/{args["task_name"]}/{current_time}')
 
     # 数据处理
     data = pd.read_csv(args['csv_dir'])
@@ -120,6 +143,17 @@ if __name__ == '__main__':
     actor_optimizer = optim.Adam(model.actor_mean.parameters(), lr=args['a_lr'])  # Actor 学习率 3e-4
     critic_optimizer = optim.Adam(model.critic.parameters(), lr=args['c_lr'])    # Critic 学习率 3e-4
 
+    actor_scheduler = lr_scheduler.StepLR(
+        actor_optimizer,
+        step_size=30,
+        gamma=0.1
+    )
+    critic_scheduler = lr_scheduler.StepLR(
+        critic_optimizer,
+        step_size=30,
+        gamma=0.1
+    )
+
     # 创建时间序列环境
     env = TimeSeriesEnv(dataloader)
 
@@ -129,6 +163,10 @@ if __name__ == '__main__':
     rewards_list = train_model(model,
                                 env,
                                 actor_optimizer,
+                                actor_scheduler,
                                 critic_optimizer,
-                                args)
+                                critic_scheduler,
+                                args,
+                                writer)
 
+    writer.close()

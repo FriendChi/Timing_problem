@@ -150,6 +150,13 @@ class ActorCritic(nn.Module):
         features = self.forward(x)  # 提取特征
         value = self.critic(features)  # 计算状态价值
         return value
+
+    def load_weight(self,ckpt):
+        self.load_state_dict(ckpt['AC_model_state_dict'])
+    
+    def save_weight(self,ckpt):
+        ckpt['AC_model_state_dict'] = self.state_dict()
+        return ckpt
     
 def predict(model, env):
     """
