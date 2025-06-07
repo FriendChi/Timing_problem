@@ -44,35 +44,36 @@ def train_model(model,
 
     # 外层进度条：episodes
     for episode in trange(args['num_episodes'], desc='Episodes', unit='epi'):
-        state = env.reset()
+        state_tensor = env.reset()
         done = False
         total_reward = 0.0
 
         # 如果想要显示每个 timestep，可启用下面的 tqdm
         # step_iter = tqdm(desc='Steps', leave=False, unit='step')
 
+        #智能体与环境连续交互。只要当前的状态不是终止状态
         while not done:
             # step_iter.update(1)
 
-            # 状态转 tensor
-            state_tensor = torch.FloatTensor(state).unsqueeze(0)
+            # 状态转 tensor “状态”可以包括市场价格、交易量、技术指标（如移动平均线）、宏观经济数据等信息
+            # state_tensor = torch.FloatTensor(state).unsqueeze(0)
 
             # Actor-Critic 前向
-            action, dist = model.get_action(state_tensor)
-            value = model.get_value(state_tensor)
+            action, dist = model.get_action(state_tensor[0]) # 当前状态下采取的动作 action 和该动作的概率分布 dist
+            value = model.get_value(state_tensor[1]) # 计算当前状态的价值估计 value，这里的“价值”可以理解为预期收益。
 
             # 环境交互
-            next_state, reward, done = env.step(action.numpy())  # 若 action 是 tensor，则转 numpy
+            next_state, reward, done = env.step(action.numpy())  # 根据动作与环境交互，得到下一状态next_state、即时奖励reward以及是否结束标志 done
 
             # 下一个状态价值
-            if not done:
+            if not done: # 如果当前不是终止状态，则计算下一个状态的价值估计 next_value。
                 next_state_tensor = torch.FloatTensor(next_state).unsqueeze(0)
                 next_value = model.get_value(next_state_tensor)
-            else:
+            else: # 如果是终止状态，则将 next_value 设定为 0，因为没有后续状态需要考虑。
                 next_value = torch.tensor([0.0])
 
             # 计算 TD-error 和优势
-            delta = reward + args['gamma'] * next_value - value
+            delta = reward + args['gamma'] * next_value - value # 实际奖励加上未来折扣后的价值预测与当前价值估计之间的差异
             advantage = delta.item()
 
             # Critic 更新
@@ -103,6 +104,7 @@ def train_model(model,
         actor_scheduler.step()
         critic_scheduler.step()
         if (episode + 1) % args.get('print_interval', 10) == 0:
+            # 较高的平均奖励通常意味着智能体正在学习如何更有效地执行任务以获得更高的奖励。
             avg_rew = sum(rewards_list[-args['print_interval']:]) / args['print_interval']
             print(f"[Episode {episode+1:4d}/{args['num_episodes']}] "
                   f"Avg Reward (last {args['print_interval']}): {avg_rew:.3f}")
@@ -123,6 +125,7 @@ if __name__ == '__main__':
     # 获取指令
     parser = get_parser()
     args = vars(parser.parse_args())
+    print(args)
 
     # 获取当前时间并格式化为字符串，精确到秒
     current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -137,7 +140,7 @@ if __name__ == '__main__':
     # 初始化 Actor-Critic 模型
     # look_back: 状态历史窗口长度（输入特征维度）
     # 1: 动作空间维度（输出预测值）
-    model = ActorCritic(args['look_back'], 1)
+    model = ActorCritic(dataset.input_dim, 1)
 
     # 使用 Adam 优化器分别优化 Actor 和 Critic 网络
     actor_optimizer = optim.Adam(model.actor_mean.parameters(), lr=args['a_lr'])  # Actor 学习率 3e-4

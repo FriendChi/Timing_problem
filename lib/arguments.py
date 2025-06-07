@@ -16,7 +16,7 @@ def get_parser():
         action='store',
         type=int,
         help='时间窗口',
-        default=50,
+        default=1,
     )
     parser.add_argument(
         '--a_lr',
@@ -37,7 +37,7 @@ def get_parser():
         action='store',
         type=int,
         help='批次',
-        default=4,
+        default=1,
     )
     parser.add_argument(
         '--num_episodes',

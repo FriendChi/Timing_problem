@@ -31,7 +31,7 @@ class TimeSeriesEnv:
         self.current_step = 0
         self.current_batch = next(self.data_iter)
         self.batch_index = 0
-        return self.current_batch[0][self.batch_index]
+        return self.current_batch
 
     def step(self, action):
         """
@@ -102,7 +102,11 @@ class ActorCritic(nn.Module):
         self.actor_log_std = nn.Parameter(torch.zeros(1, action_dim))  # 动作的对数标准差（可学习参数）
         
         # Critic 网络：输出状态价值估计
-        self.critic = nn.Linear(64, 1)  # 状态价值估计
+        # self.critic = nn.Linear(64, 1)  # 状态价值估计
+
+        self.hoding_money = 1
+        self.hoding_cost = 0 
+        self.hoding_share = 0
 
     def forward(self, x):
         """
@@ -116,6 +120,15 @@ class ActorCritic(nn.Module):
         """
         features = self.feature_layer(x)
         return features
+
+    def cal_benefit(self,current_price):
+        # 计算每股的成本价
+        cost_price = self.hoding_cost / self.hoding_share
+        
+        # 计算浮盈
+        floating_profit = (current_price - cost_price) * self.hoding_share
+
+        return floating_profit
 
     def get_action(self, x):
         """
@@ -147,8 +160,9 @@ class ActorCritic(nn.Module):
         Returns:
             torch.Tensor: 状态价值，形状为 [batch_size, 1]
         """
-        features = self.forward(x)  # 提取特征
-        value = self.critic(features)  # 计算状态价值
+        # 计算浮盈
+        # features = self.forward(x)  # 提取特征
+        value = self.cal_benefit(x[0])
         return value
 
     def load_weight(self,ckpt):

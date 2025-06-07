@@ -21,6 +21,13 @@ class TimeSeriesDataset(Dataset):
         # 1. 归一化前保留为 DataFrame 格式
         self.original_df = data.copy()
 
+       # 创建 next_Close 列，向下偏移一位，最后一个样本会变成 NaN
+        self.original_df['next_Close'] = self.original_df[target_feature].shift(-1)
+
+        # 删除最后一条缺失的样本
+        self.original_df.dropna(inplace=True)
+        self.original_df.reset_index(drop=True, inplace=True)  # 可选：重置索引
+
         # 2. 执行归一化处理，返回归一化后的 DataFrame
         normalized_df = self.__normalize(self.original_df)
 
@@ -28,8 +35,11 @@ class TimeSeriesDataset(Dataset):
         if target_feature not in normalized_df.columns:
             raise ValueError(f"Target feature '{target_feature}' not found in the DataFrame columns.")
 
+        # 3. 获取 feature_names（排除目标列 'next_Close'）
+        self.feature_names = [col for col in self.original_df.columns if col != 'next_Close']
+
         # 4. 获取目标列的索引
-        target_col = normalized_df.columns.get_loc(target_feature)
+        target_col = normalized_df.columns.get_loc('next_Close')
 
         # 3. 归一化后转换为 numpy 数组
         self.data = normalized_df.values
@@ -37,6 +47,7 @@ class TimeSeriesDataset(Dataset):
         # 4. 保存参数
         self.look_back = look_back
         self.target_col = target_col
+        self.input_dim = self.data[0, :-1].shape[-1]
 
     def __normalize(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -84,8 +95,8 @@ class TimeSeriesDataset(Dataset):
 
     def __getitem__(self, idx):
         # 使用NumPy数组进行切片操作
-        x = self.data[idx:idx + self.look_back, 0]  # 假设输入特征总是第0列
-        y = self.data[idx + self.look_back, self.target_col]
+        x = self.data[idx:idx + self.look_back, :-1]  # 假设输入特征总是第0列
+        y = self.data[idx + self.look_back, -1]
         return torch.tensor(x, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
 
 
