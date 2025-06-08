@@ -13,6 +13,21 @@ files = [
 ]
 
 [[package]]
+name = "baostock"
+version = "0.8.9"
+description = "A tool for obtaining historical data of China stock market"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "baostock-0.8.9-py3-none-any.whl", hash = "sha256:7a51fb30cd6b4325f5517198e350dc2fffaaab2923cd132b9f747b8b73ae7303"},
+    {file = "baostock-0.8.9.tar.gz", hash = "sha256:8169cdbed14fa442ace63c59549bef3f92b0c3dd1df9e5d9069f7bd04a76b0da"},
+]
+
+[package.dependencies]
+pandas = ">=0.18.0"
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 description = "Cross-platform colored terminal text."
@@ -1541,4 +1556,4 @@ watchdog = ["watchdog (>=2.3)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10"
-content-hash = "52f4f4eec4332400743d3bcc4d432368dc7cad6f54319b02f845d0e51215d1aa"
+content-hash = "bc229e3d3b8574b718b9f91b01be16e59d280b36920705a856c85b5458e64e20"
