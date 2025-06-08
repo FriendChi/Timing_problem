@@ -2,6 +2,46 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
+import baostock as bs
+import pandas as pd
+import logging
+from typing import List, Optional
+
+import baostock as bs
+import pandas as pd
+
+def get_zz500():
+
+    # 登录系统
+    lg = bs.login()
+
+    # 查询历史K线数据（示例为日线）
+    rs = bs.query_history_k_data_plus(
+        code="sh.000905",  # 中证500指数代码
+        fields="date,code,open,high,low,close,volume,amount,pctChg",
+        start_date="2020-01-01",
+        end_date="2025-06-08",
+        frequency="d",  # d为日线，w为周线，m为月线
+        adjustflag="2"   # 2表示前复权
+    )
+
+    # 转换为DataFrame
+    data_list = []
+    while (rs.error_code == '0') & rs.next():
+        data_list.append(rs.get_row_data())
+    df = pd.DataFrame(data_list, columns=rs.fields)
+
+    # 登出系统
+    bs.logout()
+    df.rename(columns={'close': 'nav'}, inplace=True)
+    df['nav'] = pd.to_numeric(df['nav'])
+    df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
+
+    # 查看数据
+    print(df.head())
+    return df
+
+
 class BaseStrategy:
     """策略基类，定义策略接口"""
     def __init__(self, initial_cash=100000, **params):
@@ -118,7 +158,7 @@ class FixedPercentStrategy_cost_basis(BaseStrategy):
         """
         actions = []
         
-        # 1. 首日建仓逻辑
+        # 1. 首日建仓逻辑：第一天比建仓trade_unit_percent的资金
         if context['first_day']:
             if self.state['cash'] > 0:
                 actions.append("首日建仓")
@@ -139,32 +179,19 @@ class FixedPercentStrategy_cost_basis(BaseStrategy):
                 self.state['buy_reference_price'] = nav  # 更新买入参考点
                 return 'buy', actions
         
-        # 3. 检查是否进入卖出阶段（盈利超过阈值）
-        if (not self.state['in_selling_phase'] 
-            and self.state['total_shares'] > 0
-            and self.state['cost_basis'] > 0
-            and (nav - self.state['cost_basis']) / self.state['cost_basis'] >= self.profit_target_pct):
-            
-            self.state['in_selling_phase'] = True
-            self.state['sell_reference_price'] = nav  # 设置卖出参考点
-            actions.append(f"盈利达到{self.profit_target_pct:.0%}，开始卖出阶段")
-        
-        # 4. 卖出阶段处理
-        if self.state['in_selling_phase'] and self.state['total_shares'] > 0:
+        # 3. 卖出处理
+        if self.state['total_shares'] > 0:
             # 检查是否应该卖出（盈利超过目标百分比）
-            if self.state['sell_reference_price'] is not None:
-                profit_pct = (nav - self.state['sell_reference_price']) / self.state['sell_reference_price']
+            if self.state['cost_basis'] > 0:
+                profit_pct = (nav - self.state['cost_basis']) / self.state['cost_basis']
                 
                 if profit_pct >= self.profit_target_pct:
                     trade_unit = min(self.state['total_shares'], self.get_trade_unit(sell_mode=True))
-                    actions.append(f"相对于卖出点盈利{profit_pct:.2%}，触发卖出")
+                    actions.append(f"相对于每股持仓成本盈利{profit_pct:.2%}，触发卖出")
                     self.state['sell_reference_price'] = nav  # 更新卖出参考点
                     return 'sell', actions
-            
-            # 如果已经卖出所有持仓，结束卖出阶段
-            if self.state['total_shares'] <= 0:
-                self.state['in_selling_phase'] = False
-                actions.append("持仓已全部卖出，结束卖出阶段")
+                else:
+                    actions.append(f"相对于每股持仓成本盈利{profit_pct:.2%}，没有触发卖出")
         
         return None, actions
 
@@ -731,14 +758,15 @@ if __name__ == "__main__":
     #     profit_threshold=0.15,
     #     drawdown_threshold=0.04
     # )
-    strategy = FixedPercentStrategy()
+    strategy = FixedPercentStrategy_cost_basis()
     
     # 创建回测引擎
     backtester = Backtester(strategy)
     
     # 创建DataFrame
-    df = pd.read_csv('/app/Timing_problem/rlData.csv', parse_dates=['Date'])
-    df.rename(columns={'Date': 'date', 'Close': 'nav'}, inplace=True)
+    # df = pd.read_csv('/app/Timing_problem/rlData.csv', parse_dates=['Date'])
+    # df.rename(columns={'Date': 'date', 'Close': 'nav'}, inplace=True)
+    df = get_zz500()
     
     # 使用模拟数据运行测试
     backtester.data = df
