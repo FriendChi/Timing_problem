@@ -6,7 +6,7 @@ import baostock as bs
 import pandas as pd
 import logging
 from typing import List, Optional
-
+from stragedy import *
 import baostock as bs
 import pandas as pd
 
@@ -56,6 +56,9 @@ def get_zz500():
         pd.to_numeric, errors="coerce"
     ).astype(float)
 
+    out["MA20"] = out['nav'].rolling(20).mean()
+
+    # out["MA20_smooth"] = out["MA20"].rolling(7, center=True).mean()
 
     # # 4. 合并行情数据和估值数据
     # df = pd.merge(
@@ -66,410 +69,8 @@ def get_zz500():
     # )
 
     # 查看数据
-    print(df.head())
-    return df
-
-
-class BaseStrategy:
-    """策略基类，定义策略接口"""
-    def __init__(self, initial_cash=100000, **params):
-        """
-        初始化策略参数
-        
-        参数:
-        initial_cash (float): 初始投资额
-        params: 策略特定参数
-        """
-        self.initial_cash = initial_cash
-        self.params = params
-        self.strategy_name = "Base Strategy"
-        
-        # 重置策略状态
-        self.reset()
-    
-    def reset(self):
-        """重置策略状态"""
-        self.state = {
-            'cash': self.initial_cash,
-            'total_shares': 0, #持股量
-            'total_invested': 0,
-            'cost_basis': 0, #每股持仓成本
-            'reference_price': None,
-            'high_water_mark': 0,
-            'in_profit_taking': False
-        }
-    
-    def get_trade_unit(self):
-        """计算每次交易的单位（默认初始资金的10%）"""
-        return self.initial_cash * 0.1
-    
-    def on_data(self, date, nav, context):
-        """
-        处理每日数据，生成交易信号
-        
-        参数:
-        date: 当前日期
-        nav: 当前净值
-        context: 回测上下文信息
-        
-        返回:
-        tuple: (交易信号, 交易信息)
-        交易信号: 'buy' - 买入, 'sell' - 卖出, None - 无操作
-        交易信息: 字符串描述或自定义字典
-        """
-        raise NotImplementedError("子类必须实现此方法")
-
-class BuyXpercent_Substrategy(BaseStrategy):
-    """固定十次，分批基于参考点，固定百分比，买入，子策略"""
-    def __init__(self, initial_cash=100000, 
-                 buy_drop_pct=0.04, 
-                 profit_target_pct=0.06, 
-                 trade_unit_percent=0.1):
-        """
-        初始化策略
-        
-        参数:
-        initial_cash (float): 初始投资额，默认为100,000元
-        buy_drop_pct (float): 加仓阈值（下跌百分比），默认为4%
-        profit_target_pct (float): 盈利目标阈值，默认为6%
-        trade_unit_percent (float): 每次交易百分比，默认为10%
-        """
-        super().__init__(
-            initial_cash=initial_cash,
-            buy_drop_pct=buy_drop_pct,
-            profit_target_pct=profit_target_pct,
-            trade_unit_percent=trade_unit_percent
-        )
-
-    def buy_logic(self,trade,nav,note):
-        if self.state['cost_basis'] is not None: #确定有持仓 
-            # 计算相对于参考点的跌幅
-            drop_pct = (self.state['bug_reference'] - nav) / self.state['bug_reference']
-            
-            # 触发买入条件且现金大于购买量
-            if drop_pct >= self.buy_drop_pct and self.state['cash'] > self.get_trade_unit(False):
-                self.state['bug_reference'] = nav
-                trade['trade_type'] = 'buy'
-                trade['amount'] = self.get_trade_unit(False)
-                note.append(f"相对每股持仓成本净值下跌{drop_pct:.2%}，触发买入")
-                return trade, note        
-
-class FixedPercentStrategy_cost_basis(BaseStrategy):
-    """固定百分比买卖策略"""
-    def __init__(self, initial_cash=100000, 
-                 buy_drop_pct=0.04, 
-                 profit_target_pct=0.06, 
-                 trade_unit_percent=0.1):
-        """
-        初始化策略
-        
-        参数:
-        initial_cash (float): 初始投资额，默认为100,000元
-        buy_drop_pct (float): 加仓阈值（下跌百分比），默认为4%
-        profit_target_pct (float): 盈利目标阈值，默认为6%
-        trade_unit_percent (float): 每次交易百分比，默认为10%
-        """
-        super().__init__(
-            initial_cash=initial_cash,
-            buy_drop_pct=buy_drop_pct,
-            profit_target_pct=profit_target_pct,
-            trade_unit_percent=trade_unit_percent
-        )
-        self.strategy_name = "Fixed Percent Strategy with cost basis"
-        
-        # 初始化特定参数
-        self.buy_drop_pct = buy_drop_pct
-        self.profit_target_pct = profit_target_pct
-        self.trade_unit_percent = trade_unit_percent
-        
-    def reset(self):
-        """重置策略状态"""
-        super().reset()
-        # 重置特定状态变量
-        self.state.update({
-            'buy_reference_price': None,  # 上一次买入点的价格
-            'sell_reference_price': None,  # 上一次卖出点的价格
-            'in_selling_phase': False,    # 是否处于卖出阶段
-            'total_shares_sold': 0        # 已卖出总份额
-        })
-    
-    def get_trade_unit(self, sell_mode=False):
-        """
-        计算每次交易的单位
-        
-        参数:
-        sell_mode (bool): 如果是卖出，返回持仓百分比；买入则返回现金百分比
-        """
-        if sell_mode and self.state['total_shares'] > 0:
-            # 卖出：当前持仓的10%
-            return self.state['total_shares'] * self.trade_unit_percent
-        else:
-            # 买入：初始资金的10%
-            return self.initial_cash * self.trade_unit_percent
-    
-    def on_data(self, date, nav, context):
-        """
-        处理每日数据，生成交易信号，但不改变当前持仓，这是回测的任务
-        
-        参数:
-        date: 当前日期
-        nav: 当前净值
-        context: 回测上下文信息
-        
-        返回:
-        trade(dict): 交易详情（信号，数值，份额）
-        actions(list): 交易备注
-        """
-        trade = {'trade_type':None,'amount':None,'share':None,}
-        note = []
-        
-        # 1. 首日建仓逻辑：第一天比建仓trade_unit_percent的资金
-        if context['trade_day_idx'] == 0:
-            if self.state['cash'] > 0:
-                note.append("首日建仓")
-                trade['trade_type'] = 'buy'
-                trade['amount'] = self.get_trade_unit(False)
-                return trade, note
-            else:
-                raise ValueError('首日建仓没有资金')
-        
-        # 2. 检查买入条件（净值下跌超过阈值）
-        if self.state['cost_basis'] is not None:
-            # 计算相对于持仓的跌幅
-            drop_pct = (self.state['cost_basis'] - nav) / self.state['cost_basis']
-            
-            # 触发买入条件且现金大于购买量
-            if drop_pct >= self.buy_drop_pct and self.state['cash'] > self.get_trade_unit(False):
-                trade['trade_type'] = 'buy'
-                trade['amount'] = self.get_trade_unit(False)
-                note.append(f"相对每股持仓成本净值下跌{drop_pct:.2%}，触发买入")
-                return trade, note
-        
-        # 3. 卖出处理
-        if self.state['total_shares'] > 0 : #确认有持仓
-            # 检查是否应该卖出（盈利超过目标百分比）
-            profit_pct = (nav - self.state['cost_basis']) / self.state['cost_basis']
-            
-            if profit_pct >= self.profit_target_pct:
-                note.append(f"相对于每股持仓成本盈利{profit_pct:.2%}，触发卖出")
-                trade['trade_type'] = 'sell'
-                trade['share'] = self.get_trade_unit(True)        
-                return trade, note
-            else:
-                note.append(f"相对于每股持仓成本盈利{profit_pct:.2%}，没有触发卖出")
-    
-        return trade, note
-
-
-class FixedPercentStrategy(BaseStrategy):
-    """固定百分比买卖策略"""
-    def __init__(self, initial_cash=100000, 
-                 buy_drop_pct=0.04, 
-                 profit_target_pct=0.06, 
-                 trade_unit_percent=0.1):
-        """
-        初始化策略
-        
-        参数:
-        initial_cash (float): 初始投资额，默认为100,000元
-        buy_drop_pct (float): 加仓阈值（下跌百分比），默认为4%
-        profit_target_pct (float): 盈利目标阈值，默认为6%
-        trade_unit_percent (float): 每次交易百分比，默认为10%
-        """
-        super().__init__(
-            initial_cash=initial_cash,
-            buy_drop_pct=buy_drop_pct,
-            profit_target_pct=profit_target_pct,
-            trade_unit_percent=trade_unit_percent
-        )
-        self.strategy_name = "Fixed Percent Strategy"
-        
-        # 初始化特定参数
-        self.buy_drop_pct = buy_drop_pct
-        self.profit_target_pct = profit_target_pct
-        self.trade_unit_percent = trade_unit_percent
-        
-    def reset(self):
-        """重置策略状态"""
-        super().reset()
-        # 重置特定状态变量
-        self.state.update({
-            'buy_reference_price': None,  # 上一次买入点的价格
-            'sell_reference_price': None,  # 上一次卖出点的价格
-            'in_selling_phase': False,    # 是否处于卖出阶段
-            'total_shares_sold': 0        # 已卖出总份额
-        })
-    
-    def get_trade_unit(self, sell_mode=False):
-        """
-        计算每次交易的单位
-        
-        参数:
-        sell_mode (bool): 如果是卖出，返回持仓百分比；买入则返回现金百分比
-        """
-        if sell_mode and self.state['total_shares'] > 0:
-            # 卖出：当前持仓的10%
-            return self.state['total_shares'] * self.trade_unit_percent
-        else:
-            # 买入：初始资金的10%
-            return self.initial_cash * self.trade_unit_percent
-    
-    def on_data(self, date, nav, context):
-        """
-        处理每日数据，生成交易信号
-        
-        参数:
-        date: 当前日期
-        nav: 当前净值
-        context: 回测上下文信息
-        
-        返回:
-        tuple: (交易信号, 交易信息)
-        """
-        actions = []
-        
-        # 1. 首日建仓逻辑
-        if context['first_day']:
-            if self.state['cash'] > 0:
-                actions.append("首日建仓")
-                self.state['buy_reference_price'] = nav
-                return 'buy', actions
-            else:
-                return None, actions
-        
-        # 2. 检查买入条件（净值下跌超过阈值）
-        if self.state['buy_reference_price'] is not None:
-            # 计算相对于买入参考点的跌幅
-            drop_pct = (self.state['buy_reference_price'] - nav) / self.state['buy_reference_price']
-            
-            # 触发买入条件且仍有现金
-            if drop_pct >= self.buy_drop_pct and self.state['cash'] > 0:
-                trade_unit = min(self.state['cash'], self.get_trade_unit())
-                actions.append(f"净值下跌{drop_pct:.2%}，触发买入")
-                self.state['buy_reference_price'] = nav  # 更新买入参考点
-                return 'buy', actions
-        
-        # 3. 检查是否进入卖出阶段（盈利超过阈值）
-        if (not self.state['in_selling_phase'] 
-            and self.state['total_shares'] > 0
-            and self.state['cost_basis'] > 0
-            and (nav - self.state['cost_basis']) / self.state['cost_basis'] >= self.profit_target_pct):
-            
-            self.state['in_selling_phase'] = True
-            self.state['sell_reference_price'] = nav  # 设置卖出参考点
-            actions.append(f"盈利达到{self.profit_target_pct:.0%}，开始卖出阶段")
-        
-        # 4. 卖出阶段处理
-        if self.state['in_selling_phase'] and self.state['total_shares'] > 0:
-            # 检查是否应该卖出（盈利超过目标百分比）
-            if self.state['sell_reference_price'] is not None:
-                profit_pct = (nav - self.state['sell_reference_price']) / self.state['sell_reference_price']
-                
-                if profit_pct >= self.profit_target_pct:
-                    trade_unit = min(self.state['total_shares'], self.get_trade_unit(sell_mode=True))
-                    actions.append(f"相对于卖出点盈利{profit_pct:.2%}，触发卖出")
-                    self.state['sell_reference_price'] = nav  # 更新卖出参考点
-                    return 'sell', actions
-            
-            # 如果已经卖出所有持仓，结束卖出阶段
-            if self.state['total_shares'] <= 0:
-                self.state['in_selling_phase'] = False
-                actions.append("持仓已全部卖出，结束卖出阶段")
-        
-        return None, actions
-
-
-class FourPctStrategy(BaseStrategy):
-    """4%定投策略"""
-    def __init__(self, initial_cash=100000, 
-                 buy_threshold=0.04, 
-                 profit_threshold=0.15, 
-                 drawdown_threshold=0.04):
-        """
-        初始化4%定投策略
-        
-        参数:
-        initial_cash (float): 初始投资额，默认为100,000元
-        buy_threshold (float): 加仓阈值（下跌百分比），默认为4%
-        profit_threshold (float): 止盈阈值（超过成本的百分比），默认为15%
-        drawdown_threshold (float): 止盈回撤阈值，默认为4%
-        """
-        super().__init__(
-            initial_cash=initial_cash,
-            buy_threshold=buy_threshold,
-            profit_threshold=profit_threshold,
-            drawdown_threshold=drawdown_threshold
-        )
-        self.strategy_name = "4% DCA (Dollar-Cost Averaging) strategy"
-        
-        # 初始化特定参数
-        self.buy_threshold = buy_threshold
-        self.profit_threshold = profit_threshold
-        self.drawdown_threshold = drawdown_threshold
-        
-    def reset(self):
-        """重置策略状态"""
-        super().reset()
-        # 重置特定状态变量
-        self.state.update({
-            'reference_price': None,
-            'high_water_mark': 0,
-            'in_profit_taking': False
-        })
-    
-    def on_data(self, date, nav, context):
-        """
-        处理每日数据，生成交易信号
-        """
-        actions = []
-        
-        # 1. 首日建仓逻辑
-        if context['first_day']:
-            if self.state['cash'] > 0:
-                actions.append("建仓")
-                self.state['reference_price'] = nav
-                return 'buy', actions
-            else:
-                return None, actions
-        
-        # 2. 检查加仓条件（不在止盈期且净值下跌超过阈值）
-        if (not self.state['in_profit_taking'] 
-            and self.state['reference_price'] is not None 
-            and nav <= self.state['reference_price'] * (1 - self.buy_threshold)):
-            
-            # 只加仓现金充足的情况
-            trade_unit = self.get_trade_unit()
-            if self.state['cash'] >= trade_unit:
-                actions.append(f"加仓")
-                self.state['reference_price'] = nav  # 更新参考价格
-                return 'buy', actions
-            else:
-                actions.append("资金不足")
-        
-        # 3. 检查是否进入止盈期
-        if (not self.state['in_profit_taking'] 
-            and self.state['total_shares'] > 0 
-            and nav >= self.state['cost_basis'] * (1 + self.profit_threshold)):
-            
-            self.state['in_profit_taking'] = True
-            self.state['high_water_mark'] = nav
-            actions.append("进入止盈期")
-        
-        # 4. 止盈期处理
-        if self.state['in_profit_taking'] and self.state['total_shares'] > 0:
-            # 更新最高水位
-            if nav > self.state['high_water_mark']:
-                self.state['high_water_mark'] = nav
-            
-            # 检查回撤是否超过阈值
-            if nav <= self.state['high_water_mark'] * (1 - self.drawdown_threshold):
-                actions.append(f"止盈")
-                self.state['in_profit_taking'] = False
-                self.state['reference_price'] = None  # 重置参考点
-                return 'sell', actions
-        
-        return None, actions
-
+    print(out.head())
+    return out
 
 class Backtester:
     """回测引擎"""
@@ -660,7 +261,7 @@ class Backtester:
         # 创建上下文
         context = {
             'trade_day_idx':i,
-            'previous_row': self.data.iloc[i-1],
+            'previous_row': self.data.iloc[:i+1],
             'current_row': row
         }
 
@@ -735,6 +336,8 @@ class Backtester:
         max_drawdown = drawdown.min()
         
         # 计算交易指标
+        if self.trades_df.empty:
+            raise ValueError("没有交易记录")
         buys = self.trades_df[self.trades_df['type'] == 'buy']
         sells = self.trades_df[self.trades_df['type'] == 'sell']
         
@@ -756,6 +359,8 @@ class Backtester:
     
     def get_results(self):
         """获取回测结果"""
+        self.results_df = pd.merge(self.results_df, self.data, on='date', how='left')
+
         return {
             'daily_results': self.results_df,
             'trades': self.trades_df,
@@ -877,10 +482,12 @@ def test_strategy(df):
     #     profit_threshold=0.15,
     #     drawdown_threshold=0.04
     # )
-    strategy = FixedPercentStrategy_cost_basis()
+    # strategy = FixedPercentStrategy_cost_basis()
+    # strategy = MA20ExtremaStrategy()
     
     # 创建回测引擎
     backtester = Backtester(strategy)
+    
     
     # 创建DataFrame
     # df = pd.read_csv('/app/Timing_problem/rlData.csv', parse_dates=['Date'])
@@ -890,15 +497,15 @@ def test_strategy(df):
     backtester.data = df
     backtester.run_backtest()
     
-    # 获取结果
-    results = backtester.get_results()
-    
     # 打印报告
     print(backtester.generate_report())
     
     # 可视化结果
     backtester.plot_performance(save_path='4pct_strategy_performance.png')
-    
+
+    # 获取结果
+    results = backtester.get_results()
+
     # 保存结果到CSV
     results['daily_results'].to_csv('daily_results.csv', index=False)
     results['trades'].to_csv('trade_records.csv', index=False)
@@ -923,7 +530,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 try:
-    from scipy.signal import find_peaks
+    from scipy.signal import find_peaks, savgol_filter
     _HAS_SCIPY = True
 except ImportError:
     _HAS_SCIPY = False
@@ -1036,8 +643,54 @@ def plot_ma20_with_extrema(
         f"图已保存至 {out_path}；识别到高点 {len(local_max_idx)} 个，低点 {len(local_min_idx)} 个。"
     )
 
-    return minima_dates  # ⚡️ 返回
+    return minima_dates,df  # ⚡️ 返回
 
+import pandas as pd
+from typing import Sequence
+
+def get_high_ret_by_dates(
+    df: pd.DataFrame,
+    dates: Sequence,                  # list / Index / Series 都行
+    *,
+    date_col: str = "date",
+    high_ret_col: str = "high_ret",
+) -> pd.Series:
+    """
+    按给定日期列表提取对应行的 high_ret 特征（顺序与 dates 一致）。
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        已含 high_ret 列的数据表。
+    dates : Sequence
+        日期列表、DatetimeIndex、Series 均可。
+    date_col : str, default "date"
+        日期列名（若日期已设为索引则忽略）。
+    high_ret_col : str, default "high_ret"
+        要提取的列名。
+
+    Returns
+    -------
+    pd.Series
+        index 为日期，values 为 high_ret。
+        若某日期在 df 中找不到，对应值为 NaN。
+    """
+    # 先统一成 datetime64，避免字符串比较误差
+    dates = pd.to_datetime(dates)
+
+    if df.index.name == date_col:  # 日期已经是索引
+        out = df.loc[dates, high_ret_col]
+    else:                          # 日期还在普通列
+        tmp = (
+            df[[date_col, high_ret_col]]
+            .assign(**{date_col: pd.to_datetime(df[date_col])})
+            .set_index(date_col)
+        )
+        out = tmp.reindex(dates)[high_ret_col]
+
+    # 保证结果顺序与传入 dates 一致
+    out.index = dates
+    return out
 
 
 # 示例用法
@@ -1050,10 +703,11 @@ if __name__ == "__main__":
     if args.mode == 'test':
         test_strategy(df)
     elif args.mode == 'plot':
+        print(df[['high', 'open']].dtypes)
         df['high_ret'] = (df['high']-df['open'])/df['open']
         print(df.head())
         
-        date_list=plot_ma20_with_extrema(
+        date_list,df=plot_ma20_with_extrema(
             df,
             price_col="nav",
             date_col="date",
@@ -1061,7 +715,8 @@ if __name__ == "__main__":
             extrema_distance=7,   # 至少相隔 7 个交易日
             prominence=10,        # 峰值显著性阈值；根据数据大小酌情调整
         )
-        print(date_list)
+        high_ret_series = get_high_ret_by_dates(df, date_list)
+        print(high_ret_series)
 
 
 
