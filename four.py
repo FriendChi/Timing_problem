@@ -57,8 +57,9 @@ def get_zz500():
     ).astype(float)
 
     out["MA20"] = out['nav'].rolling(20).mean()
-    out["EMA20"] = out['nav'].ewm(span=20, adjust=False).mean()  # 20日指数移动平均线
-    out["EMA120"] = out['nav'].ewm(span=120, adjust=False).mean()  # 120日指数移动平均线
+    for i in [10,12,13,18,20,26]:
+      out[f"EMA{str(i)}"] = out['nav'].ewm(span=i, adjust=False).mean()  # i日指数移动平均线
+    
     # out["MA20_smooth"] = out["MA20"].rolling(7, center=True).mean()
 
     # # 4. 合并行情数据和估值数据
