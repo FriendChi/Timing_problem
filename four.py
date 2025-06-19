@@ -523,7 +523,7 @@ def get_parser():
         action='store',
         type=str,
         default='test',
-        choices=['test', 'plot'],
+        choices=['test', 'plot','ema'],
     )
 
     return parser
@@ -650,6 +650,83 @@ def plot_ma20_with_extrema(
 import pandas as pd
 from typing import Sequence
 
+def plot_nav_ema_crosses(
+    df: pd.DataFrame,
+    nav_col: str = "nav",
+    ema_list: list[int] | tuple[int, ...] = (10, 12, 13, 18, 20, 26),
+    show_emas: tuple[int, ...] | None = (10, 20, 26),
+    figsize: tuple[int, int] = (12, 6),
+    linestyle: str = "--",
+    linewidth: float = 0.5,
+    save_path: str | None = "ema_crosses.png"
+) -> list[pd.Timestamp]:
+    """
+    绘制 NAV 曲线，并用竖线标记所有 EMA 交叉点。
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        必须包含 nav_col 和各 EMA 列 (如 'EMA10')。
+    nav_col : str
+        净值列名。
+    ema_list : sequence[int]
+        需要检测交叉的 EMA 周期列表。
+    show_emas : tuple[int] | None
+        需要额外画在图上的 EMA 周期；设为 None 则不画 EMA 曲线。
+    figsize : (int, int)
+        图像尺寸。
+    linestyle : str
+        竖线样式 (matplotlib 样式字符串)。
+    linewidth : float
+        竖线宽度。
+    save_path : str | None
+        图片保存路径；设为 None 则只显示不保存 (plt.show)。
+
+    Returns
+    -------
+    cross_dates : list[pd.Timestamp]
+        所有 EMA 交叉日期（去重排序后）。
+    """
+    # -------- 1. 计算所有 EMA 交叉日期 --------
+    cross_dates: set[pd.Timestamp] = set()
+    for i, j in itertools.combinations(ema_list, 2):
+        diff = df[f"EMA{i}"] - df[f"EMA{j}"]
+        crossed = (diff.shift(1) * diff) < 0          # 符号翻转 == 交叉
+        cross_dates.update(df.loc[crossed].index)
+
+    cross_dates = sorted(cross_dates)
+
+    # -------- 2. 绘图 --------
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # 2.1 NAV 曲线
+    df[nav_col].plot(ax=ax, linewidth=1, label=nav_col)
+
+    # 2.2 额外绘制选定 EMA
+    if show_emas:
+        for span in show_emas:
+            label = f"EMA{span}"
+            if label in df.columns:
+                df[label].plot(ax=ax, linewidth=0.8, alpha=0.7, label=label)
+
+    # 2.3 交叉竖线
+    for dt in cross_dates:
+        ax.axvline(dt, linestyle=linestyle, linewidth=linewidth)
+
+    # -------- 3. 美化 & 输出 --------
+    ax.set_title("NAV 与 EMA 交叉标记")
+    ax.legend()
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300)
+        plt.close()
+    else:
+        plt.show()
+
+    return cross_dates
+
+
 def get_high_ret_by_dates(
     df: pd.DataFrame,
     dates: Sequence,                  # list / Index / Series 都行
@@ -719,6 +796,9 @@ if __name__ == "__main__":
         )
         high_ret_series = get_high_ret_by_dates(df, date_list)
         print(high_ret_series)
+    elif args.mode == 'ema':
+      plot_nav_ema_crosses(df)
+  
 
 
 
