@@ -345,3 +345,178 @@ class MA20ExtremaStrategy(BaseStrategy):
                 note.append(f"盈利{profit_pct:.2%}，未达到卖出目标")
         
         return trade, note
+from math import sqrt
+import numpy as np
+import pandas as pd
+
+class EMAVolTargetStrategy(BaseStrategy):
+    """
+    双均线趋势 + 波动率目标仓位策略
+    ---------------------------------
+    核心思想：
+    1. **趋势过滤**——使用 20 日 EMA (快线) 与 120 日 EMA (慢线) 的交叉判断市场方向：
+       - 快线高于慢线 → 做多
+       - 否则 → 空仓
+    2. **动态仓位**——通过控制组合年化波动率使其靠近目标值 σ* (默认 15%)：
+       - 先计算过去 30 个交易日的年化波动率 σ_t
+       - 目标仓位 w = σ* / σ_t，并截取到区间 [0, 1]
+    3. **调仓节奏**——仅在每周五调仓，降低 whipsaw（反复进出）
+    """
+
+    def __init__(self,
+                 initial_cash: float = 100_000,
+                 target_vol: float = 0.15,
+                 vol_lookback: int = 30,
+                 ema_fast: int = 20,
+                 ema_slow: int = 120,
+                 rebalance_weekday: int = 4  # 0=周一,…,4=周五
+                 ):
+        # ------- 调用父类初始化，准备账户状态 -------
+        super().__init__(initial_cash=initial_cash)
+
+        # ------- 策略元数据 -------
+        self.strategy_name = "EMA Trend + Vol Target"
+
+        # ------- 参数 -------
+        self.target_vol = target_vol          # 目标年化波动率 σ*
+        self.vol_lookback = vol_lookback      # 历史波动率回看窗口
+        self.ema_fast = ema_fast              # 快线长度
+        self.ema_slow = ema_slow              # 慢线长度
+        self.rebalance_weekday = rebalance_weekday  # 调仓日（默认周五）
+
+    # =========== 工具函数 =========== #
+    @staticmethod
+    def _annualised_vol(nav_series: np.ndarray) -> float:
+        """根据净值序列计算年化波动率。
+        若数据不足返回 NaN。"""
+        if len(nav_series) < 2:           # 数据点太少无法计算
+            return np.nan
+        # 对数收益率：r_t = ln(P_t / P_{t-1})
+        rets = np.diff(np.log(nav_series))
+        # 样本标准差 * √252 得到年化波动率
+        return rets.std(ddof=1) * sqrt(252)
+
+    def _desired_weight(self, nav_hist: np.ndarray) -> float:
+        """依据历史净值计算目标仓位 w = σ*/σ_t，结果限制在 [0,1]。"""
+        if len(nav_hist) < self.vol_lookback:
+            # 历史数据不足 → 暂不持仓
+            return 0.0
+        sigma_t = self._annualised_vol(nav_hist)
+        if np.isnan(sigma_t) or sigma_t == 0.0:
+            return 0.0
+        return min(1.0, self.target_vol / sigma_t)
+
+    # =========== 生命周期 =========== #
+    def reset(self):
+        """重置策略，在每次回测开始或被复位时调用。"""
+        super().reset()
+        self.state.update({
+            "last_signal_long": False,  # 记录上一次趋势信号是否为多头
+            "desired_weight": 0.0,      # 记录最新目标仓位
+        })
+
+    # =========== 核心入口 =========== #
+    def on_data(self, date, nav, context):
+        """主逻辑：每天收盘后被回测框架调用。
+
+        参数
+        ----
+        date : str | pd.Timestamp
+            当前日期
+        nav : float
+            当日收盘净值
+        context : dict
+            {
+                "current_row": pd.Series,   # 今日数据
+                "previous_row": pd.DataFrame   # 过去数据
+            }
+        返回
+        ----
+        trade : dict
+            交易指令 {trade_type, amount, share}
+        note : list[str]
+            决策说明
+        """
+        # 初始化交易指令与说明
+        trade = {"trade_type": None, "amount": None, "share": None}
+        note = []
+
+        # === 1. 读取 EMA 指标 ===
+        cur = context["current_row"]
+        # 兼容不同列名：若已预计算好的字段名不同，可在此处修改
+        ema_fast_val = cur.get("EMA20") if "EMA20" in cur else cur.get("EMA_FAST")
+        ema_slow_val = cur.get("EMA120") if "EMA120" in cur else cur.get("EMA_SLOW")
+
+        # 数据缺失 → 无法生成信号
+        if ema_fast_val is None or ema_slow_val is None or np.isnan(ema_fast_val) or np.isnan(ema_slow_val):
+            note.append("EMA 数据不足，跳过当日…")
+            return trade, note
+
+        # === 2. 生成趋势信号 ===
+        long_signal = ema_fast_val > ema_slow_val  # True=多头 False=空头/观望
+        holding = self.state["total_shares"] > 0  # 是否已持仓
+
+        # === 3. 判断是否到调仓日（默认周五） ===
+        is_rebalance_day = pd.Timestamp(date).weekday() == self.rebalance_weekday
+        if is_rebalance_day:
+            # 拼接过去 vol_lookback-1 天净值 + 今天
+            nav_hist = np.append(
+                context["previous_row"]["nav"].dropna().values[-(self.vol_lookback - 1):],
+                nav
+            )
+            # 计算目标仓位并保存
+            self.state["desired_weight"] = self._desired_weight(nav_hist)
+
+        desired_w = self.state["desired_weight"]
+
+        # === 4. 计算组合市值，用于确定买卖金额 ===
+        portfolio_value = self.state["cash"] + self.state["total_shares"] * nav
+
+        # ================= 交易规则 ================= #
+        # 5) 开仓：趋势多头 & 当前无仓位
+        if long_signal and not holding:
+            cash_to_use = portfolio_value * desired_w       # 需要投入的资金
+            cash_to_use = min(cash_to_use, self.state["cash"])  # 不能超过可用现金
+            if cash_to_use > 0:
+                trade["trade_type"] = "buy"
+                trade["amount"] = cash_to_use
+                note.append(f"趋势多头 → 买入，目标权重 {desired_w:.2%}")
+                self.state["last_signal_long"] = True
+                return trade, note
+
+        # 6) 平仓：趋势转空 & 当前持仓
+        if (not long_signal) and holding:
+            trade["trade_type"] = "sell"
+            trade["share"] = self.state["total_shares"]  # 全部卖出
+            note.append("趋势空头 → 清仓")
+            self.state["last_signal_long"] = False
+            return trade, note
+
+        # 7) 周五再平衡：调整仓位大小
+        if holding and is_rebalance_day:
+            current_w = (self.state["total_shares"] * nav) / portfolio_value  # 当前实际权重
+
+            if desired_w < 1e-4:  # 目标 ≈ 0 → 清仓
+                trade["trade_type"] = "sell"
+                trade["share"] = self.state["total_shares"]
+                note.append("目标权重≈0 → 清仓避险")
+                self.state["last_signal_long"] = False
+                return trade, note
+
+            # 偏差 >5% 才调整，避免微调导致频繁交易
+            if abs(desired_w - current_w) > 0.05:
+                diff_value = (desired_w - current_w) * portfolio_value
+                if diff_value > 0:  # 需要加仓
+                    trade["trade_type"] = "buy"
+                    trade["amount"] = min(diff_value, self.state["cash"])
+                    note.append(f"加仓至 {desired_w:.2%} (当前 {current_w:.2%})")
+                else:              # 需要减仓
+                    trade["trade_type"] = "sell"
+                    sell_value = abs(diff_value)
+                    max_sell_shares = self.state["total_shares"]
+                    trade["share"] = min(max_sell_shares, sell_value / nav)
+                    note.append(f"减仓至 {desired_w:.2%} (当前 {current_w:.2%})")
+                return trade, note
+
+        # 8) 无操作
+        return trade, note
