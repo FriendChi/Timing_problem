@@ -512,6 +512,8 @@ def test_strategy(df):
     results['daily_results'].to_csv('daily_results.csv', index=False)
     results['trades'].to_csv('trade_records.csv', index=False)
 
+    return results
+
 import argparse
 
 
@@ -647,75 +649,62 @@ def plot_ma20_with_extrema(
 
     return minima_dates,df  # ⚡️ 返回
 
+import itertools
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 import pandas as pd
-from typing import Sequence
 
 def plot_nav_ema_crosses(
     df: pd.DataFrame,
     nav_col: str = "nav",
-    ema_list: list[int] | tuple[int, ...] = (10, 12, 13, 18, 20, 26),
-    show_emas: tuple[int, ...] | None = (10, 20, 26),
-    figsize: tuple[int, int] = (12, 6),
-    linestyle: str = "--",
-    linewidth: float = 0.5,
-    save_path: str | None = "ema_crosses.png"
-) -> list[pd.Timestamp]:
+    ema_list: tuple[int, ...] = (10, 12, 13, 18, 20, 26),
+    figsize=(14, 7),
+    save_path: str | None = "ema_crosses_30.png"
+) -> dict[str, list[pd.Timestamp]]:
     """
-    绘制 NAV 曲线，并用竖线标记所有 EMA 交叉点。
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        必须包含 nav_col 和各 EMA 列 (如 'EMA10')。
-    nav_col : str
-        净值列名。
-    ema_list : sequence[int]
-        需要检测交叉的 EMA 周期列表。
-    show_emas : tuple[int] | None
-        需要额外画在图上的 EMA 周期；设为 None 则不画 EMA 曲线。
-    figsize : (int, int)
-        图像尺寸。
-    linestyle : str
-        竖线样式 (matplotlib 样式字符串)。
-    linewidth : float
-        竖线宽度。
-    save_path : str | None
-        图片保存路径；设为 None 则只显示不保存 (plt.show)。
-
-    Returns
-    -------
-    cross_dates : list[pd.Timestamp]
-        所有 EMA 交叉日期（去重排序后）。
+    绘制 NAV，并用 30 种颜色标记所有 up / down EMA 交叉。
+    返回 {类别名: 日期列表} 字典，键共 30 个。
     """
-    # -------- 1. 计算所有 EMA 交叉日期 --------
-    cross_dates: set[pd.Timestamp] = set()
-    for i, j in itertools.combinations(ema_list, 2):
-        diff = df[f"EMA{i}"] - df[f"EMA{j}"]
-        crossed = (diff.shift(1) * diff) < 0          # 符号翻转 == 交叉
-        cross_dates.update(df.loc[crossed].index)
+    # ---- 1. 生成颜色 ----
+    cmap1 = cm.get_cmap("tab20").colors          # 20 种
+    cmap2 = cm.get_cmap("tab20b").colors         # 20 种
+    all_colors = list(cmap1) + list(cmap2)       # 40 种，足够
+    color_iter = iter(all_colors)
 
-    cross_dates = sorted(cross_dates)
+    # ---- 2. 计算交叉 ----
+    cross_dict: dict[str, list[pd.Timestamp]] = {}
 
-    # -------- 2. 绘图 --------
+    for fast, slow in itertools.combinations(sorted(ema_list), 2):
+        diff = df[f"EMA{fast}"] - df[f"EMA{slow}"]
+        prev = diff.shift(1)
+
+        up_mask   = (prev < 0) & (diff > 0)      # 上穿
+        down_mask = (prev > 0) & (diff < 0)      # 下穿
+
+        up_dates   = df.index[up_mask].tolist()
+        down_dates = df.index[down_mask].tolist()
+
+        cross_dict[f"EMA{fast}_over_EMA{slow}_up"]   = up_dates
+        cross_dict[f"EMA{fast}_over_EMA{slow}_down"] = down_dates
+
+    # ---- 3. 绘图 ----
     fig, ax = plt.subplots(figsize=figsize)
 
-    # 2.1 NAV 曲线
-    df[nav_col].plot(ax=ax, linewidth=1, label=nav_col)
+    # 3.1 画 NAV
+    df[nav_col].plot(ax=ax, lw=1.2, label=nav_col)
 
-    # 2.2 额外绘制选定 EMA
-    if show_emas:
-        for span in show_emas:
-            label = f"EMA{span}"
-            if label in df.columns:
-                df[label].plot(ax=ax, linewidth=0.8, alpha=0.7, label=label)
+    # 3.2 为每个类别画竖线
+    for cls_name, dates in cross_dict.items():
+        color = next(color_iter)
+        for dt in dates:
+            ax.axvline(dt, color=color, lw=0.8, alpha=0.9)
+        # 把颜色与 label 绑定一次即可
+        ax.axvline(dates[0] if dates else df.index[0],
+                   color=color, lw=0.8, label=cls_name.split("_down")[0][:15] + "…",
+                   alpha=0.9)
 
-    # 2.3 交叉竖线
-    for dt in cross_dates:
-        ax.axvline(dt, linestyle=linestyle, linewidth=linewidth)
-
-    # -------- 3. 美化 & 输出 --------
-    ax.set_title("NAV 与 EMA 交叉标记")
-    ax.legend()
+    ax.set_title("NAV 与 30 种 EMA 上/下穿标记")
+    ax.legend(loc="upper left", fontsize=7, ncol=3, frameon=False)
     plt.tight_layout()
 
     if save_path:
@@ -724,12 +713,13 @@ def plot_nav_ema_crosses(
     else:
         plt.show()
 
-    return cross_dates
+    return cross_dict
+
 
 
 def get_high_ret_by_dates(
     df: pd.DataFrame,
-    dates: Sequence,                  # list / Index / Series 都行
+    dates ,                  # list / Index / Series 都行
     *,
     date_col: str = "date",
     high_ret_col: str = "high_ret",
@@ -771,6 +761,27 @@ def get_high_ret_by_dates(
     out.index = dates
     return out
 
+N_FLAGS = 30              # 布尔开关数量
+
+def objective(trial: optuna.trial.Trial) -> float:
+    """
+    由 Optuna 自动调用。trial 持有随机/贝叶斯采样器。
+    返回值 = 策略收益率；Optuna 会自动最大化它。
+    """
+    # ---- 1) 生成 30 个 bool 参数 ----
+    params = {
+        f"flag_{i}": trial.suggest_int(f"flag_{i}", 0, 1) == 1  # 0/1 -> False/True
+        for i in range(N_FLAGS)
+    }
+
+    # ---- 2) 运行你的策略 / 回测 ----
+    # 例子：随机收益率 (占位符)。请替换为真实 annual_return
+    # annual_return = run_strategy(params)      # <—— 你的函数
+    annual_return = np.random.normal(0.15, 0.05)  # demo
+
+    # ---- 3) 返回值越大越好 ----
+    return annual_return
+
 
 # 示例用法
 if __name__ == "__main__":
@@ -780,7 +791,8 @@ if __name__ == "__main__":
     df = get_zz500()
 
     if args.mode == 'test':
-        test_strategy(df)
+        result = test_strategy(df)
+        print(result)
     elif args.mode == 'plot':
         print(df[['high', 'open']].dtypes)
         df['high_ret'] = (df['high']-df['open'])/df['open']
@@ -797,7 +809,9 @@ if __name__ == "__main__":
         high_ret_series = get_high_ret_by_dates(df, date_list)
         print(high_ret_series)
     elif args.mode == 'ema':
-      plot_nav_ema_crosses(df)
+      ema_dict = plot_nav_ema_crosses(df)
+      for key,val in ema_dict.items():
+        print(key,len(val))
   
 
 

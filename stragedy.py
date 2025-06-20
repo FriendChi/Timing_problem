@@ -520,3 +520,104 @@ class EMAVolTargetStrategy(BaseStrategy):
 
         # 8) 无操作
         return trade, note
+
+
+
+class CrossPointBuyStrategy(BaseStrategy):
+    """基于交叉点点买入，盈利达到4%时全部卖出的策略"""
+    
+    def __init__(self, buydate_set,initial_cash=100000, 
+                 profit_target_pct=0.04, 
+                 trade_unit_percent=0.1, 
+                 extrema_distance=5, 
+                 prominence=0.05):
+        """
+        初始化策略
+        
+        参数:
+        initial_cash (float): 初始投资额，默认为100,000元
+        profit_target_pct (float): 盈利目标阈值，默认为4%
+        trade_unit_percent (float): 每次交易的百分比，默认为10%
+        extrema_distance (int): 查找极值的最小间距，默认为5
+        prominence (float): 查找极值的显著性，默认为0.05
+        """
+        super().__init__(
+            initial_cash=initial_cash
+        )
+
+        self.buydate_set = buydate_set
+        self.strategy_name = "Cross Point Buy Strategy"
+        
+        # 初始化特定参数
+        self.profit_target_pct=profit_target_pct,
+        self.trade_unit_percent=trade_unit_percent
+        self.extrema_distance = extrema_distance
+        self.prominence = prominence
+        
+    def reset(self):
+        """重置策略状态"""
+        super().reset()
+        # 重置特定状态变量
+        self.state.update({
+            'last_buy_price': None,  # 上一次买入点的价格
+            'in_selling_phase': False,  # 是否处于卖出阶段
+        })
+    
+    def get_trade_unit(self, sell_mode=False):
+        """
+        计算每次交易的单位
+        
+        参数:
+        sell_mode (bool): 如果是卖出，返回持仓百分比；买入则返回现金百分比
+        """
+        if sell_mode and self.state['total_shares'] > 0:
+            # 卖出：当前持仓的全部
+            return self.state['total_shares']
+        else:
+            # 买入：初始资金的10%
+            return self.initial_cash * self.trade_unit_percent
+
+    def JudgeBugSignal(self, current_data):
+      if current_data.name in self.buydate_set:
+        return True
+      else:
+        return False
+
+    def on_data(self, date, nav, context):
+        """
+        处理每日数据，生成交易信号
+        
+        参数:
+        date: 当前日期
+        nav: 当前净值
+        context: 回测上下文信息
+        
+        返回:
+        trade(dict): 交易详情（信号，数值，份额）
+        actions(list): 交易备注
+        """
+        trade = {'trade_type': None, 'amount': None, 'share': None}
+        note = []
+
+        buy_falg = JudgeBugSignal(context['current_row'])
+        
+        # 1. 检查是否处于买入点（前天为近20天的最小值）
+        if buy_falg and self.state['cash'] > self.get_trade_unit(False):
+          trade['trade_type'] = 'buy'
+          trade['amount'] = self.get_trade_unit(False)
+          self.state['last_buy_price'] = nav  # 更新买入价
+          return trade, note
+        
+        # 2. 卖出处理
+        if self.state['total_shares'] > 0:  # 确认有持仓
+            # 检查是否达到盈利目标（4%）
+            profit_pct = (nav - self.state['cost_basis']) / self.state['cost_basis']
+            if profit_pct >= self.profit_target_pct:
+                note.append(f"盈利达到{profit_pct:.2%}，触发卖出")
+                trade['trade_type'] = 'sell'
+                trade['share'] = self.get_trade_unit(True)
+                return trade, note
+            else:
+                note.append(f"盈利{profit_pct:.2%}，未达到卖出目标")
+        
+        return trade, note
