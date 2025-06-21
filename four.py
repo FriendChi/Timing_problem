@@ -782,11 +782,10 @@ def objective(trial: optuna.trial.Trial) -> float:
     results = backtester.get_results()
     ###############################################
 
-
-    annual_return = np.random.normal(0.15, 0.05)  # demo
-
+    r = results['performance']['total_return']-results['performance']['max_drawdown']*0.5
+    print(results['performance']['total_return'],results['performance']['max_drawdown'])
     # ---- 3) 返回值越大越好 ----
-    return results['performance']['total_return']
+    return r
 
 
 from typing import Dict, List, Set, Hashable, Iterable
@@ -874,15 +873,17 @@ if __name__ == "__main__":
           print(f"  {k}: {v}")
       from pathlib import Path          # ← 新增
       import json                      # 其余已有的 import 保持不变
+      
 
+      best_params = study.best_params
       save_path = Path("best_params.json")
       with save_path.open("w", encoding="utf-8") as f:
           json.dump(best_params, f, ensure_ascii=False, indent=2)
 
 
-      # cross_point_sets = merge_selected_by_order(ema_dict,best_488params)
-      # strategy = CrossPointBuyStrategy(cross_point_sets)
-      # result = test_strategy(df,strategy)
+      cross_point_sets = merge_selected_by_order(ema_dict,best_488params)
+      strategy = CrossPointBuyStrategy(cross_point_sets)
+      result = test_strategy(df,strategy)
 
 
 
