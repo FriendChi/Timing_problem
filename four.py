@@ -761,6 +761,8 @@ def get_high_ret_by_dates(
     out.index = dates
     return out
 
+import optuna
+
 N_FLAGS = 30              # 布尔开关数量
 
 def objective(trial: optuna.trial.Trial) -> float:
@@ -775,12 +777,70 @@ def objective(trial: optuna.trial.Trial) -> float:
     }
 
     # ---- 2) 运行你的策略 / 回测 ----
-    # 例子：随机收益率 (占位符)。请替换为真实 annual_return
-    # annual_return = run_strategy(params)      # <—— 你的函数
+    #########################################
+    cross_point_sets = merge_selected_by_order(ema_dict,params)
+
+    strategy = CrossPointBuyStrategy(cross_point_sets)
+    # 创建回测引擎
+    backtester = Backtester(strategy)
+    
+    # 使用模拟数据运行测试
+    backtester.data = df
+    backtester.run_backtest()
+
+    # 获取结果
+    results = backtester.get_results()
+    ###############################################
+
+
     annual_return = np.random.normal(0.15, 0.05)  # demo
 
     # ---- 3) 返回值越大越好 ----
-    return annual_return
+    return results['performance']['total_return']
+
+
+from typing import Dict, List, Set, Hashable, Iterable
+
+def merge_selected_by_order(
+    list_dict: Dict[Hashable, List],
+    flag_dict: Dict[Hashable, bool],
+) -> Set:
+    """
+    按字典插入顺序将 list_dict 与 flag_dict 对齐，
+    对应位置 flag 为 True 的列表统一合并并去重，返回 set。
+
+    参数
+    ----
+    list_dict : Dict[Any, List]
+        值为列表的有序字典。
+    flag_dict : Dict[Any, bool]
+        值为布尔的有序字典。第 i 个布尔对应 list_dict 的第 i 个列表。
+
+    返回
+    ----
+    Set
+        所有满足 flag==True 的列表元素去重后的集合。
+
+    异常
+    ----
+    ValueError
+        两字典长度不同。
+    TypeError
+        flag_dict 中出现非布尔值。
+    """
+    if len(list_dict) != len(flag_dict):
+        raise ValueError(
+            f"Length mismatch: list_dict={len(list_dict)}, flag_dict={len(flag_dict)}"
+        )
+
+    merged: Set = set()
+    for values, flag in zip(list_dict.values(), flag_dict.values()):
+        if not isinstance(flag, bool):
+            raise TypeError(f"Expected bool, got {type(flag).__name__}: {flag!r}")
+        if flag:
+            merged.update(values)
+
+    return merged
 
 
 # 示例用法
@@ -812,6 +872,22 @@ if __name__ == "__main__":
       ema_dict = plot_nav_ema_crosses(df)
       for key,val in ema_dict.items():
         print(key,len(val))
+      study = optuna.create_study(
+          direction="maximize",           # 最大化收益率
+          sampler=optuna.samplers.TPESampler(multivariate=True, group=True),  # 默认 TPE
+      )
+
+      study.optimize(objective, n_trials=6000, show_progress_bar=True)
+      print("最佳收益率:", study.best_value)
+      print("最佳参数:")
+      for k, v in study.best_params.items():
+          print(f"  {k}: {v}")
+
+      # 可保存以备复现
+      study.trials_dataframe().to_csv("optuna_trials.csv", index=False)
+
+
+
   
 
 

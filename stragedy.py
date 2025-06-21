@@ -599,7 +599,7 @@ class CrossPointBuyStrategy(BaseStrategy):
         trade = {'trade_type': None, 'amount': None, 'share': None}
         note = []
 
-        buy_falg = JudgeBugSignal(context['current_row'])
+        buy_falg = self.JudgeBugSignal(context['current_row'])
         
         # 1. 检查是否处于买入点（前天为近20天的最小值）
         if buy_falg and self.state['cash'] > self.get_trade_unit(False):
