@@ -476,17 +476,7 @@ class Backtester:
         return report.strip()
 
 
-def test_strategy(df):
-        # 创建策略
-    # strategy = FourPctStrategy(
-    #     initial_cash=100000,
-    #     buy_threshold=0.04,
-    #     profit_threshold=0.15,
-    #     drawdown_threshold=0.04
-    # )
-    # strategy = FixedPercentStrategy_cost_basis()
-    # strategy = MA20ExtremaStrategy()
-    strategy = EMAVolTargetStrategy()
+def test_strategy(df,strategy):
     # 创建回测引擎
     backtester = Backtester(strategy)
     
@@ -851,7 +841,7 @@ if __name__ == "__main__":
     df = get_zz500()
 
     if args.mode == 'test':
-        result = test_strategy(df)
+        result = test_strategy(df,strategy)
         print(result)
     elif args.mode == 'plot':
         print(df[['high', 'open']].dtypes)
@@ -877,14 +867,24 @@ if __name__ == "__main__":
           sampler=optuna.samplers.TPESampler(multivariate=True, group=True),  # 默认 TPE
       )
 
-      study.optimize(objective, n_trials=6000, show_progress_bar=True)
+      study.optimize(objective, n_trials=1000, show_progress_bar=True)
       print("最佳收益率:", study.best_value)
       print("最佳参数:")
       for k, v in study.best_params.items():
           print(f"  {k}: {v}")
+      from pathlib import Path          # ← 新增
+      import json                      # 其余已有的 import 保持不变
 
-      # 可保存以备复现
-      study.trials_dataframe().to_csv("optuna_trials.csv", index=False)
+      save_path = Path("best_params.json")
+      with save_path.open("w", encoding="utf-8") as f:
+          json.dump(best_params, f, ensure_ascii=False, indent=2)
+
+
+      # cross_point_sets = merge_selected_by_order(ema_dict,best_488params)
+      # strategy = CrossPointBuyStrategy(cross_point_sets)
+      # result = test_strategy(df,strategy)
+
+
 
 
 
