@@ -20,7 +20,7 @@ def get_zz500():
         code="sh.000905",  # 中证500指数代码
         fields="date,code,open,high,low,close,volume,amount,pctChg",
         start_date="2017-01-01",
-        end_date="2025-06-08",
+        end_date="2024-01-01",
         frequency="d",  # d为日线，w为周线，m为月线
         adjustflag="2"   # 2表示前复权
     )
@@ -515,7 +515,6 @@ def get_parser():
         action='store',
         type=str,
         default='test',
-        choices=['test', 'plot','ema'],
     )
 
     return parser
@@ -830,6 +829,107 @@ def merge_selected_by_order(
             merged.update(values)
 
     return merged
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+# ---- 改成完全向量化的安全版 RSI，避免 iat 写入失败 ----
+def _rsi(series: pd.Series, n: int) -> pd.Series:
+    delta = series.diff()
+    gain  = delta.clip(lower=0)
+    loss  = -delta.clip(upper=0)
+
+    roll_up   = gain.ewm(alpha=1/n, adjust=False, min_periods=n).mean()
+    roll_down = loss.ewm(alpha=1/n, adjust=False, min_periods=n).mean()
+
+    rs  = roll_up / roll_down
+    rsi = 100 - 100 / (1 + rs)
+    return rsi
+
+
+def plot_nav_rsi(
+    df: pd.DataFrame,
+    nav_col: str = "nav",
+    date_col: str | None = None,
+    rsi_periods: tuple[int, ...] = (6, 9, 14, 26),
+    save_path: str | Path = "nav_rsi.png",
+    rsi_csv_path: str | Path | None = "rsi_values.csv",
+    figsize: tuple[int, int] = (12, 7),
+) -> Path:
+    """
+    绘制 nav 折线 + 多条 RSI，并保存图片；可选保存 RSI CSV。
+    附带多重异常检查，遇到问题立即抛出精准提示。
+    """
+    # ---------- 1. 基础校验 ----------
+    if nav_col not in df.columns:
+        raise ValueError(f"[×] 列 '{nav_col}' 不存在。请确认 df.columns = {list(df.columns)}")
+
+    if date_col is not None and date_col not in df.columns:
+        raise ValueError(f"[×] 日期列 '{date_col}' 不存在。")
+
+    if len(df) < max(rsi_periods) + 1:
+        raise ValueError(f"[×] 行数 {len(df)} 不足以计算最长周期 RSI({max(rsi_periods)}).")
+
+    # ---------- 2. 准备数据 ----------
+    data = df.copy()
+    if date_col is not None:
+        data = data.set_index(date_col)
+
+    data = data.sort_index()
+    # 强制 nav 转数值
+    data[nav_col] = pd.to_numeric(data[nav_col], errors="coerce")
+
+    if data[nav_col].isna().all():
+        raise ValueError(f"[×] '{nav_col}' 列全部无法转成数值，可能是空值/字符串。")
+
+    # ---------- 3. 计算 RSI ----------
+    for n in rsi_periods:
+        col = f"RSI{n}"
+        data[col] = _rsi(data[nav_col], n)
+        if data[col].isna().all():
+            raise ValueError(f"[×] 计算 {col} 得到全 NaN。检查 nav 数据是否断档，或样本太短。")
+
+    # ---------- 4. 可选保存 CSV ----------
+    if rsi_csv_path is not None:
+        rsi_cols = [f"RSI{n}" for n in rsi_periods]
+        sub = data
+        if sub.empty:
+            raise ValueError("[×] RSI 结果全部 NaN，CSV 未写入。")
+        sub.to_csv(rsi_csv_path, index=True)
+        print(f"[✓] RSI 已保存至: {Path(rsi_csv_path).resolve()} (共 {len(sub)} 行)")
+
+    # ---------- 5. 画图 ----------
+    fig, (ax_price, ax_rsi) = plt.subplots(
+        2, 1, sharex=True, figsize=figsize,
+        gridspec_kw={"height_ratios": [3, 2]}
+    )
+
+    ax_price.plot(data.index, data[nav_col], label=nav_col, lw=1.2)
+    ax_price.set_ylabel("NAV")
+    ax_price.legend(loc="upper left")
+    ax_price.grid(True, ls="--", lw=0.3, alpha=0.6)
+
+    for n in rsi_periods:
+        ax_rsi.plot(data.index, data[f"RSI{n}"], label=f"RSI {n}", lw=1)
+    ax_rsi.axhline(70, color="gray", ls="--", lw=0.8)
+    ax_rsi.axhline(30, color="gray", ls="--", lw=0.8)
+    ax_rsi.set_ylabel("RSI")
+    ax_rsi.set_ylim(0, 100)
+    ax_rsi.legend(loc="upper left", ncol=2)
+    ax_rsi.grid(True, ls="--", lw=0.3, alpha=0.6)
+
+    fig.tight_layout()
+    save_path = Path(save_path)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"[✓] 图已保存至: {save_path.resolve()}")
+    return save_path
+
+
 
 
 # 示例用法
@@ -857,6 +957,16 @@ if __name__ == "__main__":
         )
         high_ret_series = get_high_ret_by_dates(df, date_list)
         print(high_ret_series)
+    elif args.mode == 'plot_rsi':
+      # 假设 df 已经在内存中，包含 'date' 与 'nav' 两列
+      plot_nav_rsi(
+        df,
+        nav_col="nav",
+        date_col="date",
+        save_path="nav_rsi.png",
+        rsi_csv_path="nav_rsi_values.csv"   # 想关掉保存就传 None
+    )
+
     elif args.mode == 'ema':
       ema_dict = plot_nav_ema_crosses(df)
       for key,val in ema_dict.items():
