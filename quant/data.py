@@ -2,6 +2,7 @@ import baostock as bs
 import pandas as pd
 from collections.abc import Iterable
 from pathlib import Path
+import datetime,zoneinfo
 
 def dynamic_quantile_threshold(series: pd.Series,
                 window: int = 252,
@@ -40,7 +41,7 @@ class DataManager:
     ) -> None:
         self.date_dict = {
           'train':["2017-01-01","2024-01-01"],
-          'val':["2024-01-01","2025-06-01"],
+          'val':["2024-01-01",datetime.now(zoneinfo.ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")],
         }
         self.start_date,self.end_date = self.date_dict[date_str]
         self.code = code
