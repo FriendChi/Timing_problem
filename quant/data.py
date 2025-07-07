@@ -3,6 +3,26 @@ import pandas as pd
 from collections.abc import Iterable
 from pathlib import Path
 
+def dynamic_quantile_threshold(series: pd.Series,
+                window: int = 252,
+                q: float = .10,
+                min_cap: float | None = None,
+                max_cap: float | None = None) -> pd.Series:
+    """
+    计算滚动分位阈值，返回与原 series 对齐的阈值序列
+    window : 用过去多少日的 RSI 统计分位
+    q      : 分位阈值（0.10 = 10%）
+    min_cap/max_cap : 给阈值加上下限（可选）
+    """
+    thresh = series.rolling(window, min_periods=window//2).quantile(q)
+    if min_cap is not None:
+        thresh = thresh.clip(lower=min_cap)
+    if max_cap is not None:
+        thresh = thresh.clip(upper=max_cap)
+    return thresh
+
+
+
 class DataManager:
     """
     通用指数（日线）数据抓取器  
@@ -64,7 +84,7 @@ class DataManager:
     def add_indicators(
         self,
         kinds: Iterable[str] | None = ("ma", "ema", "rsi"),   # ★ 默认三种都可
-        ma_windows: Iterable[int] | None  = (18,20),
+        ma_windows: Iterable[int] | None  = (18,20,50,200),
         ema_spans: Iterable[int]  | None  = (10, 12, 13, 18, 20, 26),
         rsi_periods: Iterable[int] | None = (6, 9, 14, 26),  # ★ 新增
     ) -> pd.DataFrame:
@@ -91,7 +111,16 @@ class DataManager:
         if "rsi" in kinds_norm and rsi_periods:
             for p in rsi_periods:
                 df[f"RSI{p}"] = self._calc_rsi(df["nav"], p)
-
+                if p == 14:
+                  df[f"RSI{p}_thr"] = dynamic_quantile_threshold(df[f"RSI{p}"],
+                                             window=252,  # 约 1 年
+                                             q=.10,
+                                             max_cap=35)  # 不让阈值高过 35
+                elif p == 26:
+                  df[f"RSI{p}_thr"] = dynamic_quantile_threshold(df[f"RSI{p}"],
+                                            window=252,
+                                            q=.15,       # 26 周期信号更“钝”，分位可放宽
+                                            max_cap=45)  
         # ★ 保存带指标版
         self._save_df(df, "ind")
 
